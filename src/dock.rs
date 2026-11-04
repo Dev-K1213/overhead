@@ -1,5 +1,5 @@
 //! Closing the window only hides it, so Overhead keeps tracking and notifying with no
-//! window open. Clicking the Dock icon or a notification brings it back.
+//! window open. The menu bar item or a notification brings it back.
 
 #[cfg(target_os = "macos")]
 pub fn hide(window: &gpui::Window) {

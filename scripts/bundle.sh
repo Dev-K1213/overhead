@@ -18,6 +18,7 @@ if [ "${1:-}" = "--install" ]; then
     rm -rf /Applications/Overhead.app
     cp -R "$app" /Applications/
     echo "Installed /Applications/Overhead.app"
+    open /Applications/Overhead.app
 else
     echo "Built $app"
 fi

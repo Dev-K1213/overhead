@@ -3,6 +3,7 @@ mod blur;
 mod dock;
 mod feed;
 mod location;
+mod menubar;
 mod notify;
 mod number_field;
 mod root;
@@ -61,6 +62,8 @@ fn main() {
             },
         ]);
         notify::init();
+        menubar::init();
+        menubar::update(&[]);
 
         let bounds = Bounds::centered(None, size(px(420.), px(720.)), cx);
         let window = cx

@@ -72,6 +72,7 @@ impl Overhead {
         self.radius_field
             .update(cx, |field, cx| field.set_value(Some(radius_mi), cx));
         self.tracker.retain(|c| c.distance_mi <= radius_mi as f64);
+        self.update_menu_bar();
         self.restart_poll(cx);
     }
 
@@ -84,6 +85,7 @@ impl Overhead {
         settings::save_altitude(altitude);
         self.tracker
             .retain(|c| altitude.contains(c.aircraft.alt_baro.as_ref()));
+        self.update_menu_bar();
         self.restart_poll(cx);
     }
 
@@ -136,6 +138,7 @@ impl Overhead {
                 for contact in self.tracker.update(contacts, Local::now()) {
                     notify_arrival(&contact);
                 }
+                self.update_menu_bar();
                 self.status = Status::Live { source };
             }
             Err(err) => {
@@ -144,6 +147,26 @@ impl Overhead {
             }
         }
         cx.notify();
+    }
+
+    fn update_menu_bar(&self) {
+        let rows: Vec<String> = self
+            .tracker
+            .current
+            .iter()
+            .take(8)
+            .map(|sighting| {
+                let contact = &sighting.contact;
+                format!(
+                    "{} · {:.1} mi {} · {}",
+                    contact.aircraft.name(),
+                    contact.distance_mi,
+                    contact.direction,
+                    altitude(&contact.aircraft)
+                )
+            })
+            .collect();
+        crate::menubar::update(&rows);
     }
 
     fn title_bar(&self, theme: &Theme) -> impl IntoElement {
@@ -605,10 +628,7 @@ fn home_link(theme: &Theme) -> impl IntoElement {
 
 fn notify_arrival(contact: &Contact) {
     let aircraft = &contact.aircraft;
-    let title = format!(
-        "{} overhead",
-        aircraft.model().unwrap_or("Aircraft")
-    );
+    let title = format!("{} overhead", aircraft.model().unwrap_or("Aircraft"));
     let body = format!(
         "{} · {:.1} mi {} · {}",
         aircraft.name(),

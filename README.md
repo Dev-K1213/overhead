@@ -14,7 +14,7 @@ Overhead checks public ADS-B data every 10 seconds. When an aircraft enters the 
 - Click the radius in "Within 10 mi of home" to change it (1–250 miles).
 - Click **home**, or choose **Overhead → Change Home Location…**, to move home.
 - Open **Settings** with the ⚙ button or ⌘, to change home, the radius and approximate location, or to only watch a range of altitudes.
-- Close the window and Overhead keeps watching and notifying from the Dock. Click the Dock icon to bring it back, or press ⌘Q to stop.
+- Close the window and Overhead keeps watching and notifying in the background. Use the ✈ menu bar item to reopen the window or quit.
 
 ## Install
 
