@@ -1,6 +1,6 @@
 # Overhead
 
-A small Mac app that tells you when military aircraft fly over your home.
+A small Mac app that tells you when aircraft fly over your home.
 
 <p align="center">
   <img src="docs/screenshots/main.png" width="32%" alt="The main window, in light and dark mode">
@@ -8,7 +8,7 @@ A small Mac app that tells you when military aircraft fly over your home.
   <img src="docs/screenshots/notifications.png" width="32%" alt="Turning on notifications">
 </p>
 
-Overhead checks public ADS-B data every 10 seconds. When a military aircraft enters the area around home, you get a notification showing its type, callsign, distance and altitude. The window lists what's overhead now and what flew past recently, with a link to each aircraft on Flightradar24.
+Overhead checks public ADS-B data every 10 seconds. When an aircraft enters the area around home, you get a notification showing its type, callsign, distance and altitude. The window lists what's overhead now and what flew past recently, with a link to each aircraft on Flightradar24.
 
 - Set home with your current location, an address, or coordinates.
 - Click the radius in "Within 10 mi of home" to change it (1–250 miles).
@@ -42,7 +42,7 @@ cargo run                      # run from source
 
 ## How it works
 
-- **Data:** [adsb.fi](https://adsb.fi), with [adsb.lol](https://adsb.lol) as a fallback when adsb.fi doesn't respond. Aircraft are marked military by the feeds' own database (`dbFlags`).
+- **Data:** [adsb.fi](https://adsb.fi), with [adsb.lol](https://adsb.lol) as a fallback when adsb.fi doesn't respond. Overhead shows all aircraft returned by the feeds within your selected radius and altitude range.
 - **Address lookup:** [OpenStreetMap Nominatim](https://nominatim.org).
 - **Your location:** Core Location, used once if you choose it during setup.
 

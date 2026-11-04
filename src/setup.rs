@@ -238,7 +238,7 @@ impl Setup {
             } else {
                 "Move home"
             },
-            "Overhead watches the sky around one spot and tells you when military aircraft fly over it.",
+            "Overhead watches the sky around one spot and tells you when aircraft fly over it.",
             div()
                 .mt(px(24.))
                 .flex()
@@ -423,7 +423,7 @@ impl Setup {
             Page::Notifications,
             sample_notification(theme),
             "Know when one flies over",
-            "Get a notification the moment a military aircraft enters your zone, even while Overhead is in the background.",
+            "Get a notification the moment an aircraft enters your zone, even while Overhead is in the background.",
             div(),
             div()
                 .flex()

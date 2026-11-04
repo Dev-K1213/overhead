@@ -194,7 +194,7 @@ impl Overhead {
                 div()
                     .text_size(px(15.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Military aircraft in your zone"),
+                    .child("Aircraft in your zone"),
             )
             .child(
                 div()
@@ -607,7 +607,7 @@ fn notify_arrival(contact: &Contact) {
     let aircraft = &contact.aircraft;
     let title = format!(
         "{} overhead",
-        aircraft.model().unwrap_or("Military aircraft")
+        aircraft.model().unwrap_or("Aircraft")
     );
     let body = format!(
         "{} · {:.1} mi {} · {}",

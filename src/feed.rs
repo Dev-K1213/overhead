@@ -8,7 +8,6 @@ pub const MAX_RADIUS_MI: u32 = 250;
 
 const MILES_PER_NM: f64 = 1.150_78;
 const EARTH_RADIUS_MI: f64 = 3958.8;
-const MILITARY_FLAG: u32 = 1;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Aircraft {
@@ -23,8 +22,6 @@ pub struct Aircraft {
     pub description: Option<String>,
     #[serde(rename = "ownOp")]
     pub operator: Option<String>,
-    #[serde(rename = "dbFlags", default)]
-    pub db_flags: u32,
     pub alt_baro: Option<Altitude>,
     #[serde(rename = "gs")]
     pub ground_speed: Option<f64>,
@@ -145,7 +142,7 @@ pub fn agent() -> ureq::Agent {
         .into()
 }
 
-/// Military aircraft within the radius, closest first. Tries each source in order.
+/// Aircraft within the radius, closest first. Tries each source in order.
 ///
 /// With `approximate`, the feeds only see home rounded to two decimals (about 1 km).
 /// The query grows by a mile to cover the difference, and distances still use exact home.
@@ -172,7 +169,7 @@ pub fn fetch(
             .and_then(|mut r| r.body_mut().read_json::<Response>())
         {
             Ok(response) => {
-                return Ok((source.name, military_contacts(response.ac, home, radius_mi)));
+                return Ok((source.name, nearby_aircraft(response.ac, home, radius_mi)));
             }
             Err(err) => errors.push(format!("{}: {err}", source.name)),
         }
@@ -180,10 +177,9 @@ pub fn fetch(
     Err(errors.join("; "))
 }
 
-fn military_contacts(aircraft: Vec<Aircraft>, home: Coords, radius_mi: u32) -> Vec<Contact> {
+fn nearby_aircraft(aircraft: Vec<Aircraft>, home: Coords, radius_mi: u32) -> Vec<Contact> {
     let mut contacts: Vec<Contact> = aircraft
         .into_iter()
-        .filter(|a| a.db_flags & MILITARY_FLAG != 0)
         .filter_map(|aircraft| {
             let (lat, lon) = (aircraft.lat?, aircraft.lon?);
             let distance_mi = distance_mi(home, (lat, lon));
@@ -235,19 +231,18 @@ mod tests {
     }
 
     #[test]
-    fn keeps_only_military_inside_radius() {
-        let plane = |hex: &str, flags, lat| Aircraft {
+    fn keeps_all_aircraft_inside_radius() {
+        let plane = |hex: &str, lat| Aircraft {
             hex: hex.into(),
-            db_flags: flags,
             lat: Some(lat),
             lon: Some(HOME.1),
             ..Default::default()
         };
-        let contacts = military_contacts(
+        let contacts = nearby_aircraft(
             vec![
-                plane("far", 1, HOME.0 + 0.5),
-                plane("civil", 0, HOME.0),
-                plane("near", 1, HOME.0 + 0.01),
+                plane("far", HOME.0 + 0.5),
+                plane("civil", HOME.0),
+                plane("near", HOME.0 + 0.01),
             ],
             HOME,
             10,
