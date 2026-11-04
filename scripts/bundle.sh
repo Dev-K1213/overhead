@@ -17,8 +17,7 @@ if [ "${1:-}" = "--install" ]; then
     pkill -x Overhead 2>/dev/null || true
     rm -rf /Applications/Overhead.app
     cp -R "$app" /Applications/
-    echo "Installed /Applications/Overhead.app"
-    open /Applications/Overhead.app
+    echo "Installed /Applications/Overhead.app. Open it from Applications to start Overhead."
 else
     echo "Built $app"
 fi

@@ -1,10 +1,14 @@
 use crate::location::Coords;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use std::time::Duration;
 
 pub const DEFAULT_RADIUS_MI: u32 = 10;
 /// The feeds cap a query at 250 nautical miles.
 pub const MAX_RADIUS_MI: u32 = 250;
+pub const MENU_AIRCRAFT_LIMIT: usize = 15;
 
 const MILES_PER_NM: f64 = 1.150_78;
 const EARTH_RADIUS_MI: f64 = 3958.8;
@@ -22,6 +26,20 @@ pub struct Aircraft {
     pub description: Option<String>,
     #[serde(rename = "ownOp")]
     pub operator: Option<String>,
+    #[serde(alias = "destination", alias = "dest", alias = "to")]
+    pub destination: Option<String>,
+    #[serde(alias = "origin", alias = "from")]
+    pub origin: Option<String>,
+    #[serde(skip)]
+    pub origin_name: Option<String>,
+    #[serde(skip)]
+    pub destination_name: Option<String>,
+    #[serde(skip)]
+    pub photo_url: Option<String>,
+    #[serde(skip)]
+    pub photo_page: Option<String>,
+    #[serde(skip)]
+    pub photo_photographer: Option<String>,
     pub alt_baro: Option<Altitude>,
     #[serde(rename = "gs")]
     pub ground_speed: Option<f64>,
@@ -169,12 +187,225 @@ pub fn fetch(
             .and_then(|mut r| r.body_mut().read_json::<Response>())
         {
             Ok(response) => {
-                return Ok((source.name, nearby_aircraft(response.ac, home, radius_mi)));
+                let mut contacts = nearby_aircraft(response.ac, home, radius_mi);
+                enrich_routes(agent, &mut contacts);
+                enrich_photos(agent, &mut contacts);
+                return Ok((source.name, contacts));
             }
             Err(err) => errors.push(format!("{}: {err}", source.name)),
         }
     }
     Err(errors.join("; "))
+}
+
+fn enrich_routes(agent: &ureq::Agent, contacts: &mut [Contact]) {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    static ROUTES: OnceLock<Mutex<HashMap<String, (Instant, Option<FlightRoute>)>>> = OnceLock::new();
+    let routes = ROUTES.get_or_init(|| Mutex::new(HashMap::new()));
+    let missing: Vec<_> = contacts
+        .iter()
+        .take(MENU_AIRCRAFT_LIMIT)
+        .filter_map(|contact| {
+            let aircraft = &contact.aircraft;
+            let callsign = aircraft.callsign()?.trim().to_uppercase();
+            let has_route_names = aircraft.origin_name.as_deref().is_some_and(|s| !s.trim().is_empty())
+                && aircraft.destination_name.as_deref().is_some_and(|s| !s.trim().is_empty());
+            let stale = routes
+                .lock()
+                .ok()?
+                .get(&callsign)
+                .is_none_or(|(checked, _)| checked.elapsed() > Duration::from_secs(300));
+            (!has_route_names && stale).then_some((callsign, aircraft.lat?, aircraft.lon?))
+        })
+        .collect();
+    if !missing.is_empty() {
+        let planes: Vec<_> = missing
+            .iter()
+            .map(|(callsign, lat, lng)| serde_json::json!({"callsign": callsign, "lat": lat, "lng": lng}))
+            .collect();
+        let lookup = agent
+            .post("https://api.adsb.lol/api/0/routeset")
+            .header("Accept", "application/json")
+            .send_json(serde_json::json!({"planes": planes}))
+            .and_then(|mut response| response.body_mut().read_json::<serde_json::Value>());
+        let mut found = HashMap::new();
+        if let Ok(value) = lookup {
+            if let Some(items) = value.as_array() {
+                for item in items {
+                    let Some(callsign) = item.get("callsign").and_then(|v| v.as_str()) else { continue };
+                    let airports = item.get("_airports").and_then(|v| v.as_array());
+                    let route = airports.and_then(|airports| {
+                        (airports.len() >= 2).then(|| route_from_airports(&airports[0], &airports[1])).flatten()
+                    });
+                    found.insert(callsign.trim().to_uppercase(), route);
+                }
+            }
+        }
+        for (callsign, _, _) in &missing {
+            if found.get(callsign).is_none_or(Option::is_none) {
+                if let Some(route) = lookup_adsbdb_route(agent, callsign) {
+                    found.insert(callsign.clone(), Some(route));
+                }
+            }
+        }
+        if let Ok(mut cache) = routes.lock() {
+            for (callsign, _, _) in &missing {
+                cache.insert(
+                    callsign.clone(),
+                    (Instant::now(), found.get(callsign).cloned().flatten()),
+                );
+            }
+        }
+    }
+    if let Ok(cache) = routes.lock() {
+        for contact in contacts {
+            let Some(callsign) = contact.aircraft.callsign().map(|s| s.trim().to_uppercase()) else { continue };
+            let Some((_, Some(route))) = cache.get(&callsign) else { continue };
+            if contact.aircraft.origin.as_deref().is_none_or(|s| s.trim().is_empty()) {
+                contact.aircraft.origin = Some(route.origin_code.clone());
+            }
+            if contact.aircraft.destination.as_deref().is_none_or(|s| s.trim().is_empty()) {
+                contact.aircraft.destination = Some(route.destination_code.clone());
+            }
+            contact.aircraft.origin_name = route.origin_name.clone();
+            contact.aircraft.destination_name = route.destination_name.clone();
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FlightRoute {
+    origin_code: String,
+    destination_code: String,
+    origin_name: Option<String>,
+    destination_name: Option<String>,
+}
+
+fn route_from_airports(origin: &serde_json::Value, destination: &serde_json::Value) -> Option<FlightRoute> {
+    Some(FlightRoute {
+        origin_code: airport_name(origin)?,
+        destination_code: airport_name(destination)?,
+        origin_name: airport_full_name(origin),
+        destination_name: airport_full_name(destination),
+    })
+}
+
+fn airport_name(airport: &serde_json::Value) -> Option<String> {
+    airport.get("iata").and_then(|v| v.as_str())
+        .or_else(|| airport.get("iata_code").and_then(|v| v.as_str()))
+        .or_else(|| airport.get("icao").and_then(|v| v.as_str()))
+        .or_else(|| airport.get("icao_code").and_then(|v| v.as_str()))
+        .map(str::to_owned)
+}
+
+fn airport_full_name(airport: &serde_json::Value) -> Option<String> {
+    airport.get("name").and_then(|v| v.as_str())
+        .or_else(|| airport.get("location").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+}
+
+#[derive(Clone, Debug)]
+struct RemotePhoto {
+    image: String,
+    page: String,
+    photographer: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct JetApiResponse {
+    #[serde(rename = "Images", default)]
+    images: Vec<JetApiPhoto>,
+}
+
+#[derive(Deserialize)]
+struct JetApiPhoto {
+    #[serde(rename = "Image")]
+    image: String,
+    #[serde(rename = "Link")]
+    link: String,
+    #[serde(rename = "Photographer")]
+    photographer: Option<String>,
+}
+
+fn enrich_photos(agent: &ureq::Agent, contacts: &mut [Contact]) {
+    static PHOTOS: OnceLock<Mutex<HashMap<String, (Instant, Option<RemotePhoto>)>>> = OnceLock::new();
+    let cache = PHOTOS.get_or_init(|| Mutex::new(HashMap::new()));
+    let missing: Vec<String> = contacts
+        .iter()
+        .take(MENU_AIRCRAFT_LIMIT)
+        .filter_map(|contact| contact.aircraft.registration.as_deref())
+        .map(|registration| registration.trim().to_uppercase())
+        .filter(|registration| !registration.is_empty())
+        .filter(|registration| {
+            cache.lock().ok().is_some_and(|entries| {
+                entries.get(registration).is_none_or(|(updated, _)| updated.elapsed() > Duration::from_secs(21_600))
+            })
+        })
+        .collect();
+
+    if !missing.is_empty() {
+        let results = std::thread::scope(|scope| {
+            let tasks: Vec<_> = missing
+                .iter()
+                .map(|registration| {
+                    let client = agent.clone();
+                    scope.spawn(move || (registration.clone(), fetch_jetphoto(&client, registration)))
+                })
+                .collect();
+            tasks.into_iter().filter_map(|task| task.join().ok()).collect::<Vec<_>>()
+        });
+        if let Ok(mut entries) = cache.lock() {
+            for (registration, photo) in results {
+                entries.insert(registration, (Instant::now(), photo));
+            }
+        }
+    }
+
+    if let Ok(entries) = cache.lock() {
+        for contact in contacts.iter_mut().take(MENU_AIRCRAFT_LIMIT) {
+            let Some(registration) = contact.aircraft.registration.as_deref() else { continue };
+            let Some((_, Some(photo))) = entries.get(&registration.trim().to_uppercase()) else { continue };
+            contact.aircraft.photo_url = Some(photo.image.clone());
+            contact.aircraft.photo_page = Some(photo.page.clone());
+            contact.aircraft.photo_photographer = photo.photographer.clone();
+        }
+    }
+}
+
+fn fetch_jetphoto(agent: &ureq::Agent, registration: &str) -> Option<RemotePhoto> {
+    let encoded = registration
+        .bytes()
+        .map(|byte| if byte.is_ascii_alphanumeric() || byte == b'-' { (byte as char).to_string() } else { format!("%{byte:02X}") })
+        .collect::<String>();
+    let url = format!("https://www.jetapi.dev/api?reg={encoded}&photos=1&flights=0&only_jp=true");
+    let response = agent.get(&url).call().ok()?.body_mut().read_json::<JetApiResponse>().ok()?;
+    let photo = response.images.into_iter().next()?;
+    Some(RemotePhoto {
+        image: photo.image,
+        page: photo.link,
+        photographer: photo.photographer.filter(|name| !name.trim().is_empty()),
+    })
+}
+
+fn lookup_adsbdb_route(agent: &ureq::Agent, callsign: &str) -> Option<FlightRoute> {
+    let encoded = callsign
+        .bytes()
+        .map(|byte| if byte.is_ascii_alphanumeric() || byte == b'-' { (byte as char).to_string() } else { format!("%{byte:02X}") })
+        .collect::<String>();
+    let response = agent
+        .get(&format!("https://api.adsbdb.com/v0/callsign/{encoded}"))
+        .call()
+        .ok()?
+        .body_mut()
+        .read_json::<serde_json::Value>()
+        .ok()?;
+    let route = response.get("response")?.get("flightroute")?;
+    route_from_airports(route.get("origin")?, route.get("destination")?)
 }
 
 fn nearby_aircraft(aircraft: Vec<Aircraft>, home: Coords, radius_mi: u32) -> Vec<Contact> {

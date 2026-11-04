@@ -150,23 +150,60 @@ impl Overhead {
     }
 
     fn update_menu_bar(&self) {
-        let rows: Vec<(String, String)> = self
+        let rows: Vec<crate::menubar::AircraftDetails> = self
             .tracker
             .current
             .iter()
-            .take(8)
+            .take(feed::MENU_AIRCRAFT_LIMIT)
             .map(|sighting| {
                 let contact = &sighting.contact;
-                (
-                    format!(
-                        "{} · {:.1} mi {} · {}",
-                        contact.aircraft.name(),
-                        contact.distance_mi,
-                        contact.direction,
-                        altitude(&contact.aircraft)
+                let aircraft = &contact.aircraft;
+                let mut lines = vec![format!(
+                    "Aircraft: {}",
+                    aircraft.model().unwrap_or("Unknown model")
+                )];
+                if let Some(code) = aircraft.type_code.as_deref() {
+                    lines.push(format!("Type: {code}"));
+                }
+                if let Some(operator) = aircraft.operator.as_deref() {
+                    lines.push(format!("Operator: {operator}"));
+                }
+                if let Some(registration) = aircraft.registration.as_deref() {
+                    lines.push(format!("Registration: {registration}"));
+                }
+                if let Some(origin) = airport_detail(aircraft.origin_name.as_deref(), aircraft.origin.as_deref()) {
+                    lines.push(format!("Origin: {origin}"));
+                }
+                if let Some(destination) = airport_detail(aircraft.destination_name.as_deref(), aircraft.destination.as_deref()) {
+                    lines.push(format!("Destination: {destination}"));
+                }
+                lines.push(format!("Altitude: {}", altitude(aircraft)));
+                lines.push(format!("Speed: {}", speed(aircraft)));
+                lines.push(format!("Distance: {:.1} mi", contact.distance_mi));
+                lines.push(format!("Direction: {}", contact.direction));
+                crate::menubar::AircraftDetails {
+                    title: format!("{} · {}{}", aircraft.name(), altitude(aircraft), match (
+                        aircraft.origin.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+                        aircraft.destination.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+                    ) { (Some(origin), Some(destination)) => format!(" · {origin} → {destination}"),
+                        (None, Some(destination)) => format!(" · → {destination}"),
+                        (Some(origin), None) => format!(" · {origin} →"), _ => String::new() }),
+                    flight_url: aircraft.flightradar_url(),
+                    registration: aircraft.registration.clone(),
+                    photo_url: aircraft.photo_url.clone(),
+                    photo_page: aircraft.photo_page.clone(),
+                    photo_photographer: aircraft.photo_photographer.clone(),
+                    jetphotos_url: format!(
+                        "https://www.jetphotos.com/registration/{}",
+                        aircraft.registration.as_deref().unwrap_or(&aircraft.hex)
                     ),
-                    contact.aircraft.flightradar_url(),
-                )
+                    lines,
+                    hex: aircraft.hex.clone(),
+                    latitude: aircraft.lat.unwrap_or(self.home.0),
+                    longitude: aircraft.lon.unwrap_or(self.home.1),
+                    home_latitude: self.home.0,
+                    home_longitude: self.home.1,
+                }
             })
             .collect();
         crate::menubar::update(&rows);
@@ -654,6 +691,17 @@ fn speed(aircraft: &Aircraft) -> String {
     aircraft
         .ground_speed
         .map_or("—".into(), |kt| format!("{kt:.0} kt"))
+}
+
+fn airport_detail(name: Option<&str>, code: Option<&str>) -> Option<String> {
+    let name = name.map(str::trim).filter(|value| !value.is_empty());
+    let code = code.map(str::trim).filter(|value| !value.is_empty());
+    match (name, code) {
+        (Some(name), Some(code)) if !name.eq_ignore_ascii_case(code) => Some(format!("{name} ({code})")),
+        (Some(name), _) => Some(name.to_owned()),
+        (None, Some(code)) => Some(code.to_owned()),
+        (None, None) => None,
+    }
 }
 
 pub fn thousands(n: i64) -> String {
