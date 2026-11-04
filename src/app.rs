@@ -150,19 +150,22 @@ impl Overhead {
     }
 
     fn update_menu_bar(&self) {
-        let rows: Vec<String> = self
+        let rows: Vec<(String, String)> = self
             .tracker
             .current
             .iter()
             .take(8)
             .map(|sighting| {
                 let contact = &sighting.contact;
-                format!(
-                    "{} · {:.1} mi {} · {}",
-                    contact.aircraft.name(),
-                    contact.distance_mi,
-                    contact.direction,
-                    altitude(&contact.aircraft)
+                (
+                    format!(
+                        "{} · {:.1} mi {} · {}",
+                        contact.aircraft.name(),
+                        contact.distance_mi,
+                        contact.direction,
+                        altitude(&contact.aircraft)
+                    ),
+                    contact.aircraft.flightradar_url(),
                 )
             })
             .collect();

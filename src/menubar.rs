@@ -32,6 +32,21 @@ pub fn init() {
         }
     }
 
+    extern "C" fn open_aircraft(_: &mut Object, _: Sel, sender: *mut Object) {
+        unsafe {
+            let url_string: *mut Object = msg_send![sender, representedObject];
+            if url_string.is_null() {
+                return;
+            }
+            let url: *mut Object = msg_send![class!(NSURL), URLWithString: url_string];
+            if url.is_null() {
+                return;
+            }
+            let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+            let _: objc::runtime::BOOL = msg_send![workspace, openURL: url];
+        }
+    }
+
     unsafe {
         // GPUI sets the app to regular activation policy during startup. Switch back to
         // accessory mode so the window and status item work without a Dock icon.
@@ -50,6 +65,10 @@ pub fn init() {
             decl.add_method(
                 sel!(quitOverhead:),
                 quit as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            decl.add_method(
+                sel!(openAircraft:),
+                open_aircraft as extern "C" fn(&mut Object, Sel, *mut Object),
             );
             decl.register()
         };
@@ -81,7 +100,7 @@ pub fn init() {
 }
 
 #[cfg(target_os = "macos")]
-pub fn update(aircraft: &[String]) {
+pub fn update(aircraft: &[(String, String)]) {
     use objc::runtime::Object;
     use objc::{class, msg_send, sel, sel_impl};
 
@@ -103,33 +122,32 @@ pub fn update(aircraft: &[String]) {
         let _: () = msg_send![menu, removeAllItems];
 
         let heading = nsstring(&format!("Nearby aircraft ({})", aircraft.len()));
-        add_menu_item(menu, &heading, sel!(showOverhead:), target);
+        add_menu_item(menu, &heading, sel!(showOverhead:), target, None);
         let heading_item: *mut Object = msg_send![menu, itemAtIndex: 0usize];
         let _: () = msg_send![heading_item, setEnabled: false];
 
         if aircraft.is_empty() {
             let empty = nsstring("No aircraft nearby");
-            add_menu_item(menu, &empty, sel!(showOverhead:), target);
+            add_menu_item(menu, &empty, sel!(showOverhead:), target, None);
             let empty_item: *mut Object = msg_send![menu, itemAtIndex: 1usize];
             let _: () = msg_send![empty_item, setEnabled: false];
         } else {
-            for row in aircraft.iter().take(8) {
-                let title = nsstring(row);
-                add_menu_item(menu, &title, sel!(showOverhead:), target);
-                let index: usize = msg_send![menu, numberOfItems];
-                let item: *mut Object = msg_send![menu, itemAtIndex: (index - 1)];
-                let _: () = msg_send![item, setEnabled: false];
+            for (label, url) in aircraft.iter().take(8) {
+                let title = nsstring(label);
+                let url = nsstring(url);
+                let url_ptr = &*url as *const _ as *mut Object;
+                add_menu_item(menu, &title, sel!(openAircraft:), target, Some(url_ptr));
             }
         }
 
         let separator: *mut Object = msg_send![class!(NSMenuItem), separatorItem];
         let _: () = msg_send![menu, addItem: separator];
         let show_title = nsstring("Show Overhead");
-        add_menu_item(menu, &show_title, sel!(showOverhead:), target);
+        add_menu_item(menu, &show_title, sel!(showOverhead:), target, None);
         let separator: *mut Object = msg_send![class!(NSMenuItem), separatorItem];
         let _: () = msg_send![menu, addItem: separator];
         let quit_title = nsstring("Quit Overhead");
-        add_menu_item(menu, &quit_title, sel!(quitOverhead:), target);
+        add_menu_item(menu, &quit_title, sel!(quitOverhead:), target, None);
     }
 }
 
@@ -139,6 +157,7 @@ unsafe fn add_menu_item(
     title: &objc2_foundation::NSString,
     action: objc::runtime::Sel,
     target: *mut objc::runtime::Object,
+    represented_object: Option<*mut objc::runtime::Object>,
 ) {
     use objc::{class, msg_send, sel, sel_impl};
     unsafe {
@@ -150,6 +169,9 @@ unsafe fn add_menu_item(
             msg_send![item, initWithTitle: title_ptr action: action keyEquivalent: key_ptr];
         if !target.is_null() {
             let _: () = msg_send![item, setTarget: target];
+        }
+        if let Some(object) = represented_object {
+            let _: () = msg_send![item, setRepresentedObject: object];
         }
         let _: () = msg_send![menu, addItem: item];
     }
@@ -164,4 +186,4 @@ fn nsstring(value: &str) -> objc2::rc::Retained<objc2_foundation::NSString> {
 pub fn init() {}
 
 #[cfg(not(target_os = "macos"))]
-pub fn update(_aircraft: &[String]) {}
+pub fn update(_aircraft: &[(String, String)]) {}
