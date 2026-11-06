@@ -217,7 +217,7 @@ fn enrich_routes(agent: &ureq::Agent, contacts: &mut [Contact]) {
                 .lock()
                 .ok()?
                 .get(&callsign)
-                .is_none_or(|(checked, _)| checked.elapsed() > Duration::from_secs(300));
+                .is_none_or(|(checked, _)| checked.elapsed() > Duration::from_secs(60));
             (!has_route_names && stale).then_some((callsign, aircraft.lat?, aircraft.lon?))
         })
         .collect();
@@ -236,18 +236,20 @@ fn enrich_routes(agent: &ureq::Agent, contacts: &mut [Contact]) {
             if let Some(items) = value.as_array() {
                 for item in items {
                     let Some(callsign) = item.get("callsign").and_then(|v| v.as_str()) else { continue };
+                    // Routeset uses the aircraft's current position as well as its callsign.
+                    // Ignore routes it explicitly marks implausible: callsigns can be reused
+                    // and a plausible-looking callsign-only route may belong to another flight.
                     let airports = item.get("_airports").and_then(|v| v.as_array());
                     let route = airports.and_then(|airports| {
-                        (airports.len() >= 2).then(|| route_from_airports(&airports[0], &airports[1])).flatten()
+                        if airports.len() < 2 { return None; }
+                        let route = route_from_airports(&airports[0], &airports[1])?;
+                        let plausible = item.get("plausible").and_then(|v| v.as_bool()) == Some(true);
+                        let near_path = missing.iter().find(|(candidate, _, _)| {
+                            candidate.eq_ignore_ascii_case(callsign)
+                        }).is_some_and(|(_, lat, lon)| route_is_near_position(&airports[0], &airports[1], *lat, *lon));
+                        (plausible || near_path).then_some(route)
                     });
                     found.insert(callsign.trim().to_uppercase(), route);
-                }
-            }
-        }
-        for (callsign, _, _) in &missing {
-            if found.get(callsign).is_none_or(Option::is_none) {
-                if let Some(route) = lookup_adsbdb_route(agent, callsign) {
-                    found.insert(callsign.clone(), Some(route));
                 }
             }
         }
@@ -307,6 +309,27 @@ fn airport_full_name(airport: &serde_json::Value) -> Option<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
+}
+
+/// Accept a routeset result it labels uncertain only when the live aircraft position
+/// is within 250 miles of the airport-to-airport segment.
+fn route_is_near_position(origin: &serde_json::Value, destination: &serde_json::Value, lat: f64, lon: f64) -> bool {
+    let coord = |airport: &serde_json::Value, key: &str| airport.get(key).and_then(|v| v.as_f64());
+    let (Some(a_lat), Some(a_lon), Some(b_lat), Some(b_lon)) = (
+        coord(origin, "lat"), coord(origin, "lon"), coord(destination, "lat"), coord(destination, "lon"),
+    ) else { return false; };
+
+    // Local equirectangular projection is accurate enough for this broad rejection radius.
+    let mean_lat = ((a_lat + b_lat + lat) / 3.0).to_radians();
+    let project = |p_lat: f64, p_lon: f64| (p_lon.to_radians() * mean_lat.cos() * EARTH_RADIUS_MI, p_lat.to_radians() * EARTH_RADIUS_MI);
+    let (ax, ay) = project(a_lat, a_lon);
+    let (bx, by) = project(b_lat, b_lon);
+    let (px, py) = project(lat, lon);
+    let (dx, dy) = (bx - ax, by - ay);
+    let length_sq = dx * dx + dy * dy;
+    if length_sq == 0.0 { return false; }
+    let t = (((px - ax) * dx + (py - ay) * dy) / length_sq).clamp(0.0, 1.0);
+    ((px - (ax + t * dx)).powi(2) + (py - (ay + t * dy)).powi(2)).sqrt() <= 250.0
 }
 
 #[derive(Clone, Debug)]
@@ -390,22 +413,6 @@ fn fetch_jetphoto(agent: &ureq::Agent, registration: &str) -> Option<RemotePhoto
         page: photo.link,
         photographer: photo.photographer.filter(|name| !name.trim().is_empty()),
     })
-}
-
-fn lookup_adsbdb_route(agent: &ureq::Agent, callsign: &str) -> Option<FlightRoute> {
-    let encoded = callsign
-        .bytes()
-        .map(|byte| if byte.is_ascii_alphanumeric() || byte == b'-' { (byte as char).to_string() } else { format!("%{byte:02X}") })
-        .collect::<String>();
-    let response = agent
-        .get(&format!("https://api.adsbdb.com/v0/callsign/{encoded}"))
-        .call()
-        .ok()?
-        .body_mut()
-        .read_json::<serde_json::Value>()
-        .ok()?;
-    let route = response.get("response")?.get("flightroute")?;
-    route_from_airports(route.get("origin")?, route.get("destination")?)
 }
 
 fn nearby_aircraft(aircraft: Vec<Aircraft>, home: Coords, radius_mi: u32) -> Vec<Contact> {
